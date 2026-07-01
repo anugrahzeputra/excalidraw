@@ -4,6 +4,7 @@ import {
   DEFAULT_FONT_SIZE,
   DEFAULT_TEXT_ALIGN,
   DEFAULT_VERTICAL_ALIGN,
+  DEFAULT_STROKE_STREAMLINE,
   VERTICAL_ALIGN,
   randomInteger,
   randomId,
@@ -444,6 +445,7 @@ export const newFreeDrawElement = (
     type: "freedraw";
     points?: ExcalidrawFreeDrawElement["points"];
     simulatePressure: boolean;
+    strokeOptions?: ExcalidrawFreeDrawElement["strokeOptions"];
     pressures?: ExcalidrawFreeDrawElement["pressures"];
   } & ElementConstructorOpts,
 ): NonDeleted<ExcalidrawFreeDrawElement> => {
@@ -452,7 +454,10 @@ export const newFreeDrawElement = (
     points: opts.points || [],
     pressures: opts.pressures || [],
     simulatePressure: opts.simulatePressure,
-    lastCommittedPoint: null,
+    strokeOptions: opts.strokeOptions ?? {
+      variability: "variable",
+      streamline: DEFAULT_STROKE_STREAMLINE,
+    },
   };
 };
 
@@ -466,7 +471,7 @@ export const newLinearElement = (
   const element = {
     ..._newElementBase<ExcalidrawLinearElement>(opts.type, opts),
     points: opts.points || [],
-    lastCommittedPoint: null,
+
     startBinding: null,
     endBinding: null,
     startArrowhead: null,
@@ -501,7 +506,6 @@ export const newArrowElement = <T extends boolean>(
     return {
       ..._newElementBase<ExcalidrawElbowArrowElement>(opts.type, opts),
       points: opts.points || [],
-      lastCommittedPoint: null,
       startBinding: null,
       endBinding: null,
       startArrowhead: opts.startArrowhead || null,
@@ -516,7 +520,6 @@ export const newArrowElement = <T extends boolean>(
   return {
     ..._newElementBase<ExcalidrawArrowElement>(opts.type, opts),
     points: opts.points || [],
-    lastCommittedPoint: null,
     startBinding: null,
     endBinding: null,
     startArrowhead: opts.startArrowhead || null,

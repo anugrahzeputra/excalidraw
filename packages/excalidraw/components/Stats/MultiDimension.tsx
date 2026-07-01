@@ -94,9 +94,7 @@ const resizeElementInGroup = (
   );
   if (boundTextElement) {
     const newFontSize = boundTextElement.fontSize * scale;
-    updateBoundElements(latestElement, scene, {
-      newSize: { width: updates.width, height: updates.height },
-    });
+    updateBoundElements(latestElement, scene);
     const latestBoundTextElement = elementsMap.get(boundTextElement.id);
     if (latestBoundTextElement && isTextElement(latestBoundTextElement)) {
       scene.mutateElement(latestBoundTextElement, {
@@ -263,7 +261,6 @@ const handleDimensionChange: DragInputCallbackType<
               scene.getElementsIncludingDeleted(),
               nextElementsInFrame,
               latestElement,
-              app,
             );
 
             scene.replaceAllElements(updatedElements);
@@ -418,7 +415,6 @@ const handleDragFinished: DragFinishedCallbackType = ({
       app.scene.getElementsIncludingDeleted(),
       nextElementsInFrame,
       latestElement,
-      app,
     );
 
     app.scene.replaceAllElements(updatedElements);

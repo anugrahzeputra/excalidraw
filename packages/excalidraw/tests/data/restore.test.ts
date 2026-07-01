@@ -34,6 +34,20 @@ describe("restoreElements", () => {
     mockSizeHelper.mockRestore();
   });
 
+  it("basic restoreElements", () => {
+    const textElement = API.createElement({ type: "text" });
+    const rectElement = API.createElement({ type: "rectangle" });
+    const elements = [textElement, rectElement];
+
+    const restoredElements = restore.restoreElements(elements, null);
+    expect(restoredElements.length).toBe(elements.length);
+  });
+
+  it("when imported data state is null it should return an empty array of elements", () => {
+    const restoredElements = restore.restoreElements(null, null);
+    expect(restoredElements.length).toBe(0);
+  });
+
   it("should return empty array when element is null", () => {
     expect(restore.restoreElements(null, null)).toStrictEqual([]);
   });
@@ -60,7 +74,11 @@ describe("restoreElements", () => {
     const rectElement = API.createElement({ type: "rectangle" });
     mockSizeHelper.mockImplementation(() => true);
 
-    expect(restore.restoreElements([rectElement], null).length).toBe(0);
+    expect(
+      restore.restoreElements([rectElement], null, {
+        deleteInvisibleElements: true,
+      }),
+    ).toEqual([expect.objectContaining({ isDeleted: true })]);
   });
 
   it("should restore text element correctly passing value for each attribute", () => {
@@ -85,6 +103,23 @@ describe("restoreElements", () => {
     });
   });
 
+  it("should not delete empty text element when opts.deleteInvisibleElements is not defined", () => {
+    const textElement = API.createElement({
+      type: "text",
+      text: "",
+      isDeleted: false,
+    });
+
+    const restoredElements = restore.restoreElements([textElement], null);
+
+    expect(restoredElements).toEqual([
+      expect.objectContaining({
+        id: textElement.id,
+        isDeleted: false,
+      }),
+    ]);
+  });
+
   it("should restore text element correctly with unknown font family, null text and undefined alignment", () => {
     const textElement: any = API.createElement({
       type: "text",
@@ -97,10 +132,9 @@ describe("restoreElements", () => {
     textElement.font = "10 unknown";
 
     expect(textElement.isDeleted).toBe(false);
-    const restoredText = restore.restoreElements(
-      [textElement],
-      null,
-    )[0] as ExcalidrawTextElement;
+    const restoredText = restore.restoreElements([textElement], null, {
+      deleteInvisibleElements: true,
+    })[0] as ExcalidrawTextElement;
     expect(restoredText.isDeleted).toBe(true);
     expect(restoredText).toMatchSnapshot({
       seed: expect.any(Number),
@@ -124,6 +158,86 @@ describe("restoreElements", () => {
       seed: expect.any(Number),
       versionNonce: expect.any(Number),
     });
+  });
+
+  it("should restore only valid freedraw points and keep pressures aligned", () => {
+    const freedrawElement = API.createElement({
+      type: "freedraw",
+      id: "id-freedraw-invalid-points",
+      points: [pointFrom(0, 0), pointFrom(10, 10)],
+    });
+
+    const restoredFreedraw = restore.restoreElements(
+      [
+        {
+          ...freedrawElement,
+          simulatePressure: false,
+          points: [
+            pointFrom(0, 0),
+            [Infinity, 10],
+            null,
+            pointFrom(20, 20),
+            [NaN, 30],
+            [40, null],
+          ],
+          pressures: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+        } as any,
+      ],
+      null,
+    )[0] as ExcalidrawFreeDrawElement;
+
+    expect(restoredFreedraw.points).toEqual([
+      pointFrom(0, 0),
+      pointFrom(20, 20),
+    ]);
+    expect(restoredFreedraw.pressures).toEqual([0.1, 0.4]);
+  });
+
+  it("should restore freedraw stroke variability", () => {
+    const freedrawElement = API.createElement({
+      type: "freedraw",
+      id: "id-freedraw-mode",
+      points: [pointFrom(0, 0), pointFrom(10, 10)],
+    });
+
+    const [missing, bogusString, bogusNumber, valid, variable] =
+      restore.restoreElements(
+        [
+          { ...freedrawElement, id: "missing", strokeOptions: undefined },
+          {
+            ...freedrawElement,
+            id: "bogusString",
+            strokeOptions: { variability: "scribble" },
+          },
+          {
+            ...freedrawElement,
+            id: "bogusNumber",
+            strokeOptions: { variability: 42 },
+          },
+          {
+            ...freedrawElement,
+            id: "valid",
+            strokeOptions: { variability: "constant", streamline: 0.8 },
+          },
+          {
+            ...freedrawElement,
+            id: "variable",
+            strokeOptions: { variability: "variable", streamline: 0.8 },
+          },
+        ] as any,
+        null,
+      ) as ExcalidrawFreeDrawElement[];
+
+    expect(missing.strokeOptions?.variability).toBe("variable");
+    expect(bogusString.strokeOptions?.variability).toBe("variable");
+    expect(bogusNumber.strokeOptions?.variability).toBe("variable");
+    expect(valid.strokeOptions?.variability).toBe("constant");
+    expect(variable.strokeOptions?.variability).toBe("variable");
+    expect(missing.strokeOptions?.streamline).toBe(0.5);
+    expect(bogusString.strokeOptions?.streamline).toBe(0.5);
+    expect(bogusNumber.strokeOptions?.streamline).toBe(0.5);
+    expect(valid.strokeOptions?.streamline).toBe(0.8);
+    expect(variable.strokeOptions?.streamline).toBe(0.8);
   });
 
   it("should restore line and draw elements correctly", () => {
@@ -166,6 +280,56 @@ describe("restoreElements", () => {
     });
   });
 
+  it("should normalize legacy crowfoot arrowheads on restore", () => {
+    const arrowElement = API.createElement({
+      type: "arrow",
+    });
+
+    const restoredArrow = restore.restoreElements(
+      [
+        {
+          ...arrowElement,
+          startArrowhead: "crowfoot_one",
+          endArrowhead: "crowfoot_one_or_many",
+        } as any,
+      ],
+      null,
+    )[0] as ExcalidrawLinearElement;
+
+    expect(restoredArrow.startArrowhead).toBe("cardinality_one");
+    expect(restoredArrow.endArrowhead).toBe("cardinality_one_or_many");
+  });
+
+  it("should strip element if restore fails", () => {
+    const rect1 = API.createElement({
+      type: "rectangle",
+      boundElements: [],
+    });
+    const rect2 = API.createElement({
+      type: "rectangle",
+      boundElements: [],
+    });
+
+    // define getter for a property we access during restoreElement that throws
+    Object.defineProperty(rect2, "seed", {
+      get: () => {
+        throw new Error("FORBIDDEN!");
+      },
+    });
+
+    const restoredElements = restore.restoreElements([rect1, rect2], null);
+
+    expect(restoredElements.length).toBe(1);
+
+    expect(restoredElements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: rect1.id,
+        }),
+      ]),
+    );
+  });
+
   it("should remove imperceptibly small elements", () => {
     const arrowElement = API.createElement({
       type: "arrow",
@@ -177,13 +341,16 @@ describe("restoreElements", () => {
       y: 0,
     });
 
-    const restoredElements = restore.restoreElements([arrowElement], null);
+    const restoredElements = restore.restoreElements([arrowElement], null, {
+      deleteInvisibleElements: true,
+    });
 
     const restoredArrow = restoredElements[0] as
       | ExcalidrawArrowElement
       | undefined;
 
-    expect(restoredArrow).toBeUndefined();
+    expect(restoredArrow).not.toBeUndefined();
+    expect(restoredArrow?.isDeleted).toBe(true);
   });
 
   it("should keep 'imperceptibly' small freedraw/line elements", () => {
@@ -313,6 +480,99 @@ describe("restoreElements", () => {
     expect(restoredLine.points).toMatchObject(expectedLinePoints);
   });
 
+  it("should restore only valid linear points", () => {
+    const lineElement: any = API.createElement({
+      type: "line",
+      x: 10,
+      y: 20,
+      width: 100,
+      height: 200,
+    });
+    const arrowElement: any = API.createElement({
+      type: "arrow",
+      width: 100,
+      height: 200,
+    });
+
+    lineElement.points = [
+      [2, 3],
+      null,
+      [Infinity, 4],
+      [5, 7],
+      [NaN, 8],
+      [9, null],
+    ];
+    arrowElement.points = [
+      [null, 0],
+      [Infinity, 4],
+    ];
+
+    const restoredElements = restore.restoreElements(
+      [lineElement, arrowElement],
+      null,
+    );
+    const restoredLine = restoredElements[0] as ExcalidrawLinearElement;
+    const restoredArrow = restoredElements[1] as ExcalidrawArrowElement;
+
+    expect(restoredLine.points).toEqual([pointFrom(0, 0), pointFrom(3, 4)]);
+    expect(restoredLine.x).toBe(12);
+    expect(restoredLine.y).toBe(23);
+    expect(restoredLine.width).toBe(3);
+    expect(restoredLine.height).toBe(4);
+
+    expect(restoredArrow.points).toEqual([
+      pointFrom(0, 0),
+      pointFrom(100, 200),
+    ]);
+  });
+
+  it("should mark extremely large linear elements as deleted to avoid freezing", () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+
+    // a degenerate line with astronomical coordinates (see #11497)
+    const hugeLine: any = API.createElement({
+      type: "line",
+      x: 419048829414166,
+      y: 8484,
+    });
+    hugeLine.points = [
+      [0, 0],
+      [-302985021938436, 0],
+      [-838097658820234, 30],
+    ];
+
+    const hugeArrow: any = API.createElement({ type: "arrow" });
+    hugeArrow.points = [
+      [0, 0],
+      [900000, 0],
+    ];
+
+    const normalLine: any = API.createElement({ type: "line" });
+    normalLine.points = [
+      [0, 0],
+      [100, 200],
+    ];
+
+    const [restoredLine, restoredArrow, restoredNormal] =
+      restore.restoreElements([hugeLine, hugeArrow, normalLine], null);
+
+    expect(restoredLine.isDeleted).toBe(true);
+    expect(restoredLine.width).toBe(100);
+    expect(restoredLine.height).toBe(100);
+
+    expect(restoredArrow.isDeleted).toBe(true);
+    expect(restoredArrow.width).toBe(100);
+    expect(restoredArrow.height).toBe(100);
+
+    expect(restoredNormal.isDeleted).toBe(false);
+    expect(restoredNormal.width).toBe(100);
+    expect(restoredNormal.height).toBe(200);
+
+    consoleError.mockRestore();
+  });
+
   it("when the number of points of a line is greater or equal 2", () => {
     const lineElement_0 = API.createElement({
       type: "line",
@@ -411,12 +671,12 @@ describe("restoreElements", () => {
   });
 
   it("bump versions of local duplicate elements when supplied", () => {
-    const rectangle = API.createElement({ type: "rectangle" });
+    const rectangle = API.createElement({ type: "rectangle" }); // version=1
     const ellipse = API.createElement({ type: "ellipse" });
-    const rectangle_modified = newElementWith(rectangle, { isDeleted: true });
+    const rectangle_modified = newElementWith(rectangle, { isDeleted: true }); // version=2
 
-    const restoredElements = restore.restoreElements(
-      [rectangle, ellipse],
+    const restoredElements = restore.bumpElementVersions(
+      restore.restoreElements([rectangle, ellipse], null),
       [rectangle_modified],
     );
 
@@ -425,7 +685,7 @@ describe("restoreElements", () => {
     expect(restoredElements).toEqual([
       expect.objectContaining({
         id: rectangle.id,
-        version: rectangle_modified.version + 2,
+        version: rectangle_modified.version + 1,
       }),
       expect.objectContaining({
         id: ellipse.id,
@@ -433,9 +693,88 @@ describe("restoreElements", () => {
       }),
     ]);
   });
+
+  it("bump versions of local duplicate elements when supplied even if both have same version", () => {
+    const rectangle = API.createElement({ type: "rectangle" });
+
+    const restored_rectangle_1 = restore.restoreElements([rectangle], null)[0];
+    const restored_rectangle_2 = restore.restoreElements(
+      [restored_rectangle_1],
+      null,
+    )[0];
+
+    // restored rectangle version should be +1 because of re-index
+    expect(rectangle.version).not.toBe(restored_rectangle_1.version);
+
+    // restoring it again shouldn't re-index again
+    expect(restored_rectangle_1.version).toBe(restored_rectangle_2.version);
+    expect(restored_rectangle_1.versionNonce).toBe(
+      restored_rectangle_2.versionNonce,
+    );
+
+    const modified_rectangle_1 = newElementWith(restored_rectangle_1, {
+      width: 500,
+    });
+    const modified_rectangle_2 = newElementWith(restored_rectangle_2, {
+      width: 600,
+    });
+
+    const restoredElements = restore.bumpElementVersions(
+      restore.restoreElements([modified_rectangle_1], null),
+      [modified_rectangle_2],
+    );
+
+    expect(restoredElements[0].id).toBe(rectangle.id);
+    expect(restoredElements[0].id).toBe(modified_rectangle_1.id);
+    expect(restoredElements[0].versionNonce).not.toBe(
+      modified_rectangle_1.versionNonce,
+    );
+    expect(restoredElements[0].version).toBe(modified_rectangle_2.version + 1);
+  });
 });
 
 describe("restoreAppState", () => {
+  it("should restore freedraw mode app state values", () => {
+    expect(
+      restore.restoreAppState(
+        { currentItemStrokeVariability: "constant" } as any,
+        null,
+      ).currentItemStrokeVariability,
+    ).toBe("constant");
+    expect(
+      restore.restoreAppState(
+        { currentItemStrokeVariability: "variable" } as any,
+        null,
+      ).currentItemStrokeVariability,
+    ).toBe("variable");
+  });
+
+  it("when appState is null it should return the local app state property", () => {
+    const stubLocalAppState = getDefaultAppState();
+    stubLocalAppState.cursorButton = "down";
+    stubLocalAppState.name = "local app state";
+
+    const restoredAppState = restore.restoreAppState(null, stubLocalAppState);
+    expect(restoredAppState.cursorButton).toBe(stubLocalAppState.cursorButton);
+    expect(restoredAppState.name).toBe(stubLocalAppState.name);
+  });
+
+  it("when local appState is null but imported app state is supplied", () => {
+    const stubImportedAppState = getDefaultAppState();
+    stubImportedAppState.cursorButton = "down";
+    stubImportedAppState.name = "imported app state";
+
+    const importedDataState = {} as ImportedDataState;
+    importedDataState.appState = stubImportedAppState;
+
+    const restoredAppState = restore.restoreAppState(
+      importedDataState.appState,
+      null,
+    );
+    expect(restoredAppState.cursorButton).toBe("up");
+    expect(restoredAppState.name).toBe(stubImportedAppState.name);
+  });
+
   it("should restore with imported data", () => {
     const stubImportedAppState = getDefaultAppState();
     stubImportedAppState.activeTool.type = "selection";
@@ -456,6 +795,21 @@ describe("restoreAppState", () => {
     );
     expect(restoredAppState.cursorButton).toBe("up");
     expect(restoredAppState.name).toBe(stubImportedAppState.name);
+  });
+
+  it("should migrate legacy current item stroke width to stroke width key", () => {
+    const stubImportedAppState = {
+      ...getDefaultAppState(),
+      currentItemStrokeWidth: 4,
+      currentItemStrokeWidthKey: undefined,
+    } as any;
+
+    const restoredAppState = restore.restoreAppState(
+      stubImportedAppState,
+      null,
+    );
+
+    expect(restoredAppState.currentItemStrokeWidthKey).toBe("bold");
   });
 
   it("should restore with current app state when imported data state is undefined", () => {
@@ -615,84 +969,59 @@ describe("restoreAppState", () => {
   });
 });
 
-describe("restore", () => {
-  it("when imported data state is null it should return an empty array of elements", () => {
-    const stubLocalAppState = getDefaultAppState();
-
-    const restoredData = restore.restore(null, stubLocalAppState, null);
-    expect(restoredData.elements.length).toBe(0);
-  });
-
-  it("when imported data state is null it should return the local app state property", () => {
-    const stubLocalAppState = getDefaultAppState();
-    stubLocalAppState.cursorButton = "down";
-    stubLocalAppState.name = "local app state";
-
-    const restoredData = restore.restore(null, stubLocalAppState, null);
-    expect(restoredData.appState.cursorButton).toBe(
-      stubLocalAppState.cursorButton,
-    );
-    expect(restoredData.appState.name).toBe(stubLocalAppState.name);
-  });
-
-  it("when imported data state has elements", () => {
-    const stubLocalAppState = getDefaultAppState();
-
-    const textElement = API.createElement({ type: "text" });
-    const rectElement = API.createElement({ type: "rectangle" });
-    const elements = [textElement, rectElement];
-
-    const importedDataState = {} as ImportedDataState;
-    importedDataState.elements = elements;
-
-    const restoredData = restore.restore(
-      importedDataState,
-      stubLocalAppState,
-      null,
-    );
-    expect(restoredData.elements.length).toBe(elements.length);
-  });
-
-  it("when local app state is null but imported app state is supplied", () => {
-    const stubImportedAppState = getDefaultAppState();
-    stubImportedAppState.cursorButton = "down";
-    stubImportedAppState.name = "imported app state";
-
-    const importedDataState = {} as ImportedDataState;
-    importedDataState.appState = stubImportedAppState;
-
-    const restoredData = restore.restore(importedDataState, null, null);
-    expect(restoredData.appState.cursorButton).toBe("up");
-    expect(restoredData.appState.name).toBe(stubImportedAppState.name);
-  });
-
-  it("bump versions of local duplicate elements when supplied", () => {
-    const rectangle = API.createElement({ type: "rectangle" });
-    const ellipse = API.createElement({ type: "ellipse" });
-
-    const rectangle_modified = newElementWith(rectangle, { isDeleted: true });
-
-    const restoredData = restore.restore(
-      { elements: [rectangle, ellipse] },
-      null,
-      [rectangle_modified],
-    );
-
-    expect(restoredData.elements[0].id).toBe(rectangle.id);
-    expect(restoredData.elements[0].versionNonce).not.toBe(
-      rectangle.versionNonce,
-    );
-    expect(restoredData.elements).toEqual([
-      expect.objectContaining({ version: rectangle_modified.version + 2 }),
-      expect.objectContaining({
-        id: ellipse.id,
-        version: ellipse.version + 1,
-      }),
-    ]);
-  });
-});
-
 describe("repairing bindings", () => {
+  it("should strip arrow binding if repair throws", () => {
+    const container = API.createElement({
+      type: "rectangle",
+      boundElements: [],
+    });
+    const arrowElement = API.createElement({
+      type: "arrow",
+      id: "id-arrow01",
+      endBinding: {
+        elementId: container.id,
+        fixedPoint: [0.5, 0.5],
+        mode: "inside",
+      },
+    });
+
+    Object.assign(container, {
+      boundElements: [{ type: "arrow", id: arrowElement.id }],
+    });
+    // make invalid binding -> throws during repair
+    Object.assign(arrowElement, {
+      endBinding: {
+        // invalid reference
+        elementId: 42,
+      },
+    });
+
+    const restoredElements = restore.restoreElements(
+      [arrowElement, container],
+      null,
+    );
+
+    expect(restoredElements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: arrowElement.id,
+          endBinding: null,
+        }),
+        expect.objectContaining({
+          id: container.id,
+        }),
+      ]),
+    );
+
+    const restoredArrow = restoredElements[0] as ExcalidrawLinearElement;
+
+    expect(restoredArrow).toMatchSnapshot({
+      seed: expect.any(Number),
+      versionNonce: expect.any(Number),
+      // endBinding: expect.any(Object),
+    });
+  });
+
   it("should repair container boundElements when repair is true", () => {
     const container = API.createElement({
       type: "rectangle",
@@ -848,12 +1177,18 @@ describe("repairing bindings", () => {
     let restoredElements = restore.restoreElements(
       [container, invisibleBoundElement, boundElement],
       null,
+      { deleteInvisibleElements: true },
     );
 
     expect(restoredElements).toEqual([
       expect.objectContaining({
         id: container.id,
         boundElements: [obsoleteBinding, invisibleBinding, nonExistentBinding],
+      }),
+      expect.objectContaining({
+        id: invisibleBoundElement.id,
+        containerId: container.id,
+        isDeleted: true,
       }),
       expect.objectContaining({
         id: boundElement.id,
@@ -864,13 +1199,18 @@ describe("repairing bindings", () => {
     restoredElements = restore.restoreElements(
       [container, invisibleBoundElement, boundElement],
       null,
-      { repairBindings: true },
+      { repairBindings: true, deleteInvisibleElements: true },
     );
 
     expect(restoredElements).toEqual([
       expect.objectContaining({
         id: container.id,
         boundElements: [],
+      }),
+      expect.objectContaining({
+        id: invisibleBoundElement.id,
+        containerId: container.id,
+        isDeleted: true,
       }),
       expect.objectContaining({
         id: boundElement.id,

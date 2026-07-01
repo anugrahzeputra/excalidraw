@@ -13,11 +13,13 @@ export {
   actionChangeStrokeWidth,
   actionChangeFillStyle,
   actionChangeSloppiness,
+  actionChangeFreedrawMode,
   actionChangeOpacity,
   actionChangeFontSize,
   actionChangeFontFamily,
   actionChangeTextAlign,
   actionChangeVerticalAlign,
+  actionChangeArrowProperties,
 } from "./actionProperties";
 
 export {
@@ -33,6 +35,7 @@ export {
 export { actionSetEmbeddableAsActiveTool } from "./actionEmbeddable";
 
 export { actionFinalize } from "./actionFinalize";
+export { actionDeselect } from "./actionDeselect";
 
 export {
   actionChangeProjectName,
@@ -43,11 +46,7 @@ export {
 } from "./actionExport";
 
 export { actionCopyStyles, actionPasteStyles } from "./actionStyles";
-export {
-  actionToggleCanvasMenu,
-  actionToggleEditMenu,
-  actionShortcuts,
-} from "./actionMenu";
+export { actionShortcuts } from "./actionMenu";
 
 export { actionGroup, actionUngroup } from "./actionGroup";
 
@@ -82,6 +81,8 @@ export {
 export { actionToggleGridMode } from "./actionToggleGridMode";
 export { actionToggleZenMode } from "./actionToggleZenMode";
 export { actionToggleObjectsSnapMode } from "./actionToggleObjectsSnapMode";
+export { actionToggleArrowBinding } from "./actionToggleArrowBinding";
+export { actionToggleMidpointSnapping } from "./actionToggleMidpointSnapping";
 
 export { actionToggleStats } from "./actionToggleStats";
 export { actionUnbindText, actionBindText } from "./actionBoundText";
