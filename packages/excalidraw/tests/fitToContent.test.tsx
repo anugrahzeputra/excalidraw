@@ -1,11 +1,14 @@
 import React from "react";
+import { vi } from "vitest";
 
 import { Excalidraw } from "../index";
 import { AnimationController } from "../renderer/animation";
-import { SCROLL_TO_CONTENT_ANIMATION_KEY } from "../scroll";
+import { getNormalizedZoom } from "../scene";
 
 import { API } from "./helpers/api";
 import { act, render } from "./test-utils";
+
+import type { SocketId } from "../types";
 
 const { h } = window;
 
@@ -48,7 +51,9 @@ const waitForAnimationToStop = (maxFrames = 200) => {
         let remaining = maxFrames;
         const check = () => {
           if (
-            !AnimationController.running(SCROLL_TO_CONTENT_ANIMATION_KEY) ||
+            !AnimationController.running(
+              h.app.viewport.scrollToContentAnimationKey,
+            ) ||
             --remaining <= 0
           ) {
             resolve();
@@ -61,7 +66,7 @@ const waitForAnimationToStop = (maxFrames = 200) => {
   );
 };
 
-describe("fitToContent", () => {
+describe("scale-down", () => {
   it("should zoom to fit the selected element", async () => {
     await render(<Excalidraw />);
 
@@ -74,11 +79,16 @@ describe("fitToContent", () => {
       x: 50,
       y: 100,
     });
+    API.setElements([rectElement]);
 
     expect(h.state.zoom.value).toBe(1);
 
     act(() => {
-      h.app.scrollToContent(rectElement, { fitToContent: true });
+      h.app.viewport.setViewport({
+        target: rectElement,
+        fit: "scale-down",
+        animation: false,
+      });
     });
 
     // element is 10x taller than the viewport size,
@@ -102,6 +112,7 @@ describe("fitToContent", () => {
       x: 80,
       y: 80,
     });
+    API.setElements([topLeft, bottomRight]);
 
     h.state.width = 10;
     h.state.height = 10;
@@ -109,8 +120,10 @@ describe("fitToContent", () => {
     expect(h.state.zoom.value).toBe(1);
 
     act(() => {
-      h.app.scrollToContent([topLeft, bottomRight], {
-        fitToContent: true,
+      h.app.viewport.setViewport({
+        target: [topLeft, bottomRight],
+        fit: "scale-down",
+        animation: false,
       });
     });
 
@@ -119,7 +132,7 @@ describe("fitToContent", () => {
     expect(h.state.zoom.value).toBeLessThanOrEqual(0.1);
   });
 
-  it("should default to fitToContent when scrolling to an element by id", async () => {
+  it("should zoom to fit when scrolling to an element by id", async () => {
     await render(<Excalidraw />);
 
     h.state.width = 10;
@@ -137,9 +150,12 @@ describe("fitToContent", () => {
     expect(h.state.zoom.value).toBe(1);
 
     act(() => {
-      // navigating by element id (a string target) should zoom-to-fit by
-      // default, even though no `fitToContent` option was passed
-      h.app.scrollToContent(rectElement.id, { animate: false });
+      // navigating by element id (a string target) with zoomToFit
+      h.app.viewport.setViewport({
+        target: rectElement.id,
+        fit: "scale-down",
+        animation: false,
+      });
     });
 
     // element is 10x taller than the viewport, so fit-to-content should
@@ -159,17 +175,21 @@ describe("fitToContent", () => {
       x: 100,
       y: 100,
     });
+    API.setElements([rectElement]);
 
     expect(h.state.zoom.value).toBe(1);
     expect(h.state.scrollX).toBe(0);
     expect(h.state.scrollY).toBe(0);
 
     act(() => {
-      h.app.scrollToContent(rectElement);
+      h.app.viewport.setViewport({
+        target: rectElement,
+        fit: "contain",
+        animation: false,
+      });
     });
 
-    // zoom level should stay the same
-    expect(h.state.zoom.value).toBe(1);
+    expect(h.state.zoom.value).toBe(0.1);
 
     // state should reflect some scrolling
     expect(h.state.scrollX).not.toBe(0);
@@ -177,7 +197,82 @@ describe("fitToContent", () => {
   });
 });
 
-describe("fitToContent animated", () => {
+describe("none", () => {
+  it("should keep the current zoom and only center the target", async () => {
+    await render(<Excalidraw />);
+
+    h.state.width = 100;
+    h.state.height = 100;
+
+    const rectElement = API.createElement({
+      width: 50,
+      height: 50,
+      x: 1000,
+      y: 1000,
+    });
+    API.setElements([rectElement]);
+
+    act(() => {
+      API.setAppState({ zoom: { value: getNormalizedZoom(0.5) } });
+    });
+
+    act(() => {
+      h.app.viewport.setViewport({
+        target: rectElement,
+        fit: "none",
+        animation: false,
+      });
+    });
+
+    // pan-only: the zoom must stay untouched...
+    expect(h.state.zoom.value).toBe(0.5);
+    // ...with the target's center (1025, 1025) centered in the viewport
+    // (scroll = viewportSize / 2 / zoom - sceneCenter)
+    expect(h.state.scrollX).toBeCloseTo(100 / 2 / 0.5 - 1025);
+    expect(h.state.scrollY).toBeCloseTo(100 / 2 / 0.5 - 1025);
+  });
+});
+
+describe("following a collaborator", () => {
+  const userToFollow = { socketId: "socket-1" as SocketId, username: "Ann" };
+
+  it("should stop following when navigating", async () => {
+    const onUserFollow = vi.fn();
+    await render(
+      <Excalidraw userToFollow={userToFollow} onUserFollow={onUserFollow} />,
+    );
+    const rectElement = API.createElement({ x: 1000, y: 1000 });
+    API.setElements([rectElement]);
+
+    act(() => {
+      h.app.viewport.setViewport({ target: rectElement, animation: false });
+    });
+
+    expect(onUserFollow).toHaveBeenCalledTimes(1);
+    expect(onUserFollow).toHaveBeenCalledWith({
+      userToFollow,
+      action: "UNFOLLOW",
+    });
+  });
+
+  it("should keep following when not navigating", async () => {
+    const onUserFollow = vi.fn();
+    await render(
+      <Excalidraw userToFollow={userToFollow} onUserFollow={onUserFollow} />,
+    );
+
+    act(() => {
+      // clears a lock; the view stays where it is
+      h.app.viewport.setViewport(null);
+      // resolves to nothing
+      h.app.viewport.setViewport({ target: "missing-id", animation: false });
+    });
+
+    expect(onUserFollow).not.toHaveBeenCalled();
+  });
+});
+
+describe("scale-down animated", () => {
   beforeEach(() => {
     // pace the animation via requestAnimationFrame instead of a tight
     // setTimeout(0) loop, which would otherwise starve the test's own timers
@@ -203,11 +298,13 @@ describe("fitToContent animated", () => {
       x: -100,
       y: -100,
     });
+    API.setElements([rectElement]);
 
     act(() => {
-      h.app.scrollToContent(rectElement, {
-        animate: true,
-        duration: LONG_ANIMATION_DURATION,
+      h.app.viewport.setViewport({
+        target: rectElement,
+        fit: "scale-down",
+        animation: { duration: LONG_ANIMATION_DURATION },
       });
     });
 
@@ -242,15 +339,16 @@ describe("fitToContent animated", () => {
       x: 100,
       y: 100,
     });
+    API.setElements([rectElement]);
 
     expect(h.state.scrollX).toBe(0);
     expect(h.state.scrollY).toBe(0);
 
     act(() => {
-      h.app.scrollToContent(rectElement, {
-        animate: true,
-        fitToContent: true,
-        duration: LONG_ANIMATION_DURATION,
+      h.app.viewport.setViewport({
+        target: rectElement,
+        fit: "scale-down",
+        animation: { duration: LONG_ANIMATION_DURATION },
       });
     });
 
@@ -280,19 +378,24 @@ describe("fitToContent animated", () => {
       x: -100,
       y: -100,
     });
+    API.setElements([rectElement]);
 
     act(() => {
       // a short duration so the animation completes within a few frames
-      h.app.scrollToContent(rectElement, { animate: true, duration: 10 });
+      h.app.viewport.setViewport({
+        target: rectElement,
+        fit: "scale-down",
+        animation: { duration: 10 },
+      });
     });
 
     await waitForAnimationToStop();
 
     // the animation must remove itself from the controller rather than keep
     // ticking forever after reaching the target
-    expect(AnimationController.running(SCROLL_TO_CONTENT_ANIMATION_KEY)).toBe(
-      false,
-    );
+    expect(
+      AnimationController.running(h.app.viewport.scrollToContentAnimationKey),
+    ).toBe(false);
 
     // it should have settled on the target viewport (moved off the origin)
     const settledScrollX = h.state.scrollX;

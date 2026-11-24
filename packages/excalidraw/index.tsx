@@ -40,6 +40,7 @@ import type {
   AppState,
   ExcalidrawImperativeAPI,
   ExcalidrawProps,
+  UIConfig,
 } from "./types";
 
 polyfill();
@@ -67,10 +68,14 @@ export const ExcalidrawAPIProvider = ({
 const ExcalidrawBase = (props: ExcalidrawProps) => {
   const {
     onExport,
+    className,
+    ownerDocument = document,
+    renderEnvironment,
     onChange,
     onThemeChange,
     onIncrement,
     initialData,
+    initialState,
     onExcalidrawAPI,
     onMount,
     onUnmount,
@@ -81,6 +86,9 @@ const ExcalidrawBase = (props: ExcalidrawProps) => {
     renderTopRightUI,
     langCode = defaultLang.code,
     viewModeEnabled,
+    interaction,
+    ui,
+    activeTool,
     zenModeEnabled,
     gridModeEnabled,
     libraryReturnUrl,
@@ -98,6 +106,8 @@ const ExcalidrawBase = (props: ExcalidrawProps) => {
     onPointerDown,
     onPointerUp,
     onScrollChange,
+    onUserFollow,
+    userToFollow,
     onDuplicate,
     children,
     validateEmbeddable,
@@ -105,6 +115,8 @@ const ExcalidrawBase = (props: ExcalidrawProps) => {
     aiEnabled,
     showDeprecatedFonts,
     renderScrollbars,
+    viewportStatusFrame,
+    currentUserControls,
     imageOptions,
   } = props;
 
@@ -156,6 +168,15 @@ const ExcalidrawBase = (props: ExcalidrawProps) => {
     [setExcalidrawAPI],
   );
 
+  // whether the browser's own zoom is kept available while the editor is
+  // non-interactive (with navigation allowed, pinch is consumed by the
+  // editor instead, which relies on the pinch prevention below)
+  const browserZoomAllowed =
+    typeof interaction === "object" &&
+    interaction !== null &&
+    interaction.enabled?.browserZoom === true &&
+    interaction.enabled?.navigation !== true;
+
   useEffect(() => {
     const importPolyfill = async () => {
       //@ts-ignore
@@ -163,6 +184,10 @@ const ExcalidrawBase = (props: ExcalidrawProps) => {
     };
 
     importPolyfill();
+
+    if (browserZoomAllowed) {
+      return;
+    }
 
     // Block pinch-zooming on iOS outside of the content area
     const handleTouchMove = (event: TouchEvent) => {
@@ -172,24 +197,28 @@ const ExcalidrawBase = (props: ExcalidrawProps) => {
       }
     };
 
-    document.addEventListener("touchmove", handleTouchMove, {
+    ownerDocument.addEventListener("touchmove", handleTouchMove, {
       passive: false,
     });
 
     return () => {
-      document.removeEventListener("touchmove", handleTouchMove);
+      ownerDocument.removeEventListener("touchmove", handleTouchMove);
     };
-  }, []);
+  }, [browserZoomAllowed, ownerDocument]);
 
   return (
     <EditorJotaiProvider store={editorJotaiStore}>
       <InitializeApp langCode={langCode} theme={theme}>
         <App
           onExport={onExport}
+          className={className}
+          ownerDocument={ownerDocument}
+          renderEnvironment={renderEnvironment}
           onChange={onChange}
           onThemeChange={onThemeChange}
           onIncrement={onIncrement}
           initialData={initialData}
+          initialState={initialState}
           onExcalidrawAPI={handleExcalidrawAPI}
           onMount={onMount}
           onUnmount={onUnmount}
@@ -200,6 +229,9 @@ const ExcalidrawBase = (props: ExcalidrawProps) => {
           renderTopRightUI={renderTopRightUI}
           langCode={langCode}
           viewModeEnabled={viewModeEnabled}
+          interaction={interaction}
+          ui={ui}
+          activeTool={activeTool}
           zenModeEnabled={zenModeEnabled}
           gridModeEnabled={gridModeEnabled}
           libraryReturnUrl={libraryReturnUrl}
@@ -218,12 +250,16 @@ const ExcalidrawBase = (props: ExcalidrawProps) => {
           onPointerDown={onPointerDown}
           onPointerUp={onPointerUp}
           onScrollChange={onScrollChange}
+          onUserFollow={onUserFollow}
+          userToFollow={userToFollow}
           onDuplicate={onDuplicate}
           validateEmbeddable={validateEmbeddable}
           renderEmbeddable={renderEmbeddable}
           aiEnabled={aiEnabled !== false}
           showDeprecatedFonts={showDeprecatedFonts}
           renderScrollbars={renderScrollbars}
+          viewportStatusFrame={viewportStatusFrame}
+          currentUserControls={currentUserControls}
           imageOptions={normalizedImageOptions}
         >
           {children}
@@ -231,6 +267,22 @@ const ExcalidrawBase = (props: ExcalidrawProps) => {
       </InitializeApp>
     </EditorJotaiProvider>
   );
+};
+
+/** Same form (`enabled` or `disabled`), with the same controls in it. */
+const isUIConfigSame = (prev: UIConfig, next: UIConfig) => {
+  const getControls = (config: UIConfig) =>
+    ("enabled" in config ? config.enabled : config.disabled) as
+      | Record<string, boolean | undefined>
+      | undefined;
+  if ("enabled" in prev !== "enabled" in next) {
+    return false;
+  }
+  const prevControls = getControls(prev) ?? {};
+  const nextControls = getControls(next) ?? {};
+  return [
+    ...new Set([...Object.keys(prevControls), ...Object.keys(nextControls)]),
+  ].every((control) => !!prevControls[control] === !!nextControls[control]);
 };
 
 const areEqual = (prevProps: ExcalidrawProps, nextProps: ExcalidrawProps) => {
@@ -243,14 +295,72 @@ const areEqual = (prevProps: ExcalidrawProps, nextProps: ExcalidrawProps) => {
     initialData: prevInitialData,
     UIOptions: prevUIOptions = {},
     imageOptions: prevImageOptions,
+    interaction: prevInteraction,
+    ui: prevUI,
+    activeTool: prevActiveTool,
     ...prev
   } = prevProps;
   const {
     initialData: nextInitialData,
     UIOptions: nextUIOptions = {},
     imageOptions: nextImageOptions,
+    interaction: nextInteraction,
+    ui: nextUI,
+    activeTool: nextActiveTool,
     ...next
   } = nextProps;
+
+  // compare `activeTool` semantically so that hosts inlining the object
+  // (`activeTool={{ type: "laser" }}`) don't bust the memo every render
+  const isActiveToolSame =
+    prevActiveTool === nextActiveTool ||
+    (prevActiveTool?.type === nextActiveTool?.type &&
+      (prevActiveTool?.type === "custom" ? prevActiveTool.customType : null) ===
+        (nextActiveTool?.type === "custom" ? nextActiveTool.customType : null));
+
+  if (!isActiveToolSame) {
+    return false;
+  }
+
+  // compare `interaction` semantically so that hosts inlining the config
+  // object (`interaction={{ enabled: { links: true } }}`) don't bust the
+  // memo every render
+  const isInteractionSame =
+    prevInteraction === nextInteraction ||
+    (typeof prevInteraction === "object" &&
+      prevInteraction !== null &&
+      typeof nextInteraction === "object" &&
+      nextInteraction !== null &&
+      !!prevInteraction.enabled?.links === !!nextInteraction.enabled?.links &&
+      !!prevInteraction.enabled?.embeds === !!nextInteraction.enabled?.embeds &&
+      !!prevInteraction.enabled?.interactiveContent ===
+        !!nextInteraction.enabled?.interactiveContent &&
+      !!prevInteraction.enabled?.navigation ===
+        !!nextInteraction.enabled?.navigation &&
+      !!prevInteraction.enabled?.browserZoom ===
+        !!nextInteraction.enabled?.browserZoom &&
+      !!prevInteraction.enabled?.tools?.laser ===
+        !!nextInteraction.enabled?.tools?.laser &&
+      !!prevInteraction.enabled?.tools?.custom ===
+        !!nextInteraction.enabled?.tools?.custom);
+
+  if (!isInteractionSame) {
+    return false;
+  }
+
+  // compare `ui` semantically so that hosts inlining the config object don't
+  // bust the memo every render
+  const isUISame =
+    prevUI === nextUI ||
+    (typeof prevUI === "object" &&
+      prevUI !== null &&
+      typeof nextUI === "object" &&
+      nextUI !== null &&
+      isUIConfigSame(prevUI, nextUI));
+
+  if (!isUISame) {
+    return false;
+  }
 
   // comparing UIOptions
   const prevUIOptionsKeys = Object.keys(prevUIOptions) as (keyof Partial<
@@ -328,12 +438,13 @@ export {
 
 export { reconcileElements } from "./data/reconcile";
 
-export {
-  exportToCanvas,
-  exportToBlob,
-  exportToSvg,
-  exportToClipboard,
-} from "@excalidraw/utils/export";
+export { exportScene, exportToClipboard } from "./scene/export";
+
+export type {
+  ExportSceneData,
+  ExportSceneConfig,
+  ExportSceneOptions,
+} from "./scene/export";
 
 export { serializeAsJSON, serializeLibraryAsJSON } from "./data/json";
 export {
@@ -387,14 +498,25 @@ export { Stats } from "./components/Stats";
 export { DefaultSidebar } from "./components/DefaultSidebar";
 export { TTDDialog } from "./components/TTDDialog/TTDDialog";
 export { TTDDialogTrigger } from "./components/TTDDialog/TTDDialogTrigger";
-export { TTDStreamFetch } from "./components/TTDDialog/utils/TTDStreamFetch";
+export {
+  TTDStreamFetch,
+  parseSSEStream,
+} from "./components/TTDDialog/utils/TTDStreamFetch";
+export type { StreamChunk } from "./components/TTDDialog/utils/TTDStreamFetch";
 export type {
   TTDPersistenceAdapter,
   SavedChat,
   SavedChats,
 } from "./components/TTDDialog/types";
 
-export { zoomToFitBounds } from "./actions/actionCanvas";
+export type {
+  ViewportStatusFrame,
+  ElementRenderOverride,
+  ElementRenderOverrides,
+} from "./types";
+
+export { zoomToFitBounds, DEFAULT_OVERSCROLL } from "./viewport";
+
 export {
   getCommonBounds,
   getVisibleSceneBounds,
@@ -410,6 +532,7 @@ export { isElementLink } from "@excalidraw/element";
 export { Fonts } from "./fonts/Fonts";
 
 export { setCustomTextMetricsProvider } from "@excalidraw/element";
+export type { RenderEnvironment } from "@excalidraw/element";
 
 export { CommandPalette } from "./components/CommandPalette/CommandPalette";
 
